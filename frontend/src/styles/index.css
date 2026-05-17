@@ -1,0 +1,148 @@
+:root {
+  color-scheme: light;
+  --bg-primary: #f5f7fb;
+  --bg-secondary: #eef2f7;
+  --bg-card: #ffffff;
+  --border-color: #d9dee8;
+  --text-primary: #1f2937;
+  --text-secondary: #6b7280;
+  --accent-blue: #2f7cf6;
+  --accent-green: #18a058;
+  --accent-orange: #d9822b;
+  --accent-red: #d64545;
+  --accent-purple: #7c5cff;
+
+  --el-bg-color: var(--bg-card);
+  --el-bg-color-overlay: var(--bg-card);
+  --el-fill-color-blank: var(--bg-card);
+  --el-fill-color-light: var(--bg-secondary);
+  --el-border-color: var(--border-color);
+  --el-border-color-light: var(--border-color);
+  --el-text-color-primary: var(--text-primary);
+  --el-text-color-regular: var(--text-primary);
+  --el-text-color-secondary: var(--text-secondary);
+  --el-color-primary: var(--accent-blue);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --bg-primary: #10131a;
+    --bg-secondary: #171b24;
+    --bg-card: #202532;
+    --border-color: #303647;
+    --text-primary: #e6eaf2;
+    --text-secondary: #9aa3b2;
+    --accent-blue: #6ea0ff;
+    --accent-green: #4ade80;
+    --accent-orange: #f59e0b;
+    --accent-red: #f87171;
+    --accent-purple: #a78bfa;
+  }
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+body {
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+.el-card {
+  background-color: var(--bg-card) !important;
+  border-color: var(--border-color) !important;
+  color: var(--text-primary) !important;
+}
+
+.el-card__header {
+  border-bottom-color: var(--border-color) !important;
+}
+
+.el-input__wrapper {
+  background-color: var(--bg-card) !important;
+  box-shadow: 0 0 0 1px var(--border-color) inset !important;
+}
+
+.el-input__inner,
+.el-textarea__inner {
+  color: var(--text-primary) !important;
+}
+
+.el-textarea__inner {
+  background-color: var(--bg-card) !important;
+  border-color: var(--border-color) !important;
+}
+
+.el-input-number__decrease,
+.el-input-number__increase {
+  background-color: var(--bg-secondary) !important;
+  border-color: var(--border-color) !important;
+  color: var(--text-secondary) !important;
+}
+
+.el-table {
+  background-color: var(--bg-card) !important;
+  --el-table-bg-color: var(--bg-card) !important;
+  --el-table-tr-bg-color: var(--bg-card) !important;
+  --el-table-header-bg-color: var(--bg-secondary) !important;
+  --el-table-row-hover-bg-color: var(--bg-secondary) !important;
+  --el-table-text-color: var(--text-primary) !important;
+  --el-table-header-text-color: var(--text-secondary) !important;
+  --el-table-border-color: var(--border-color) !important;
+}
+
+.el-table th.el-table__cell,
+.el-table tr,
+.el-table td.el-table__cell {
+  background-color: transparent !important;
+}
+
+.el-drawer {
+  background-color: var(--bg-primary) !important;
+  color: var(--text-primary) !important;
+}
+
+.el-drawer__header {
+  color: var(--text-primary) !important;
+  border-bottom: 1px solid var(--border-color);
+  margin-bottom: 16px !important;
+  padding-bottom: 16px !important;
+}
+
+.el-descriptions__cell,
+.el-descriptions__label,
+.el-descriptions__content {
+  background-color: var(--bg-card) !important;
+  border-color: var(--border-color) !important;
+  color: var(--text-primary) !important;
+}
+
+.el-descriptions__label {
+  color: var(--text-secondary) !important;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bg-primary);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-color);
+  border-radius: 3px;
+}

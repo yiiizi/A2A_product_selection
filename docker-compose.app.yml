@@ -1,0 +1,187 @@
+services:
+  market-mcp:
+    build:
+      context: ./backend
+    image: productscout-backend:latest
+    container_name: productscout-market-mcp
+    env_file:
+      - .env
+    environment:
+      MYSQL_HOST: host.docker.internal
+      MILVUS_HOST: host.docker.internal
+    command: ["python", "mcp_server/mcp_market_server.py"]
+    ports:
+      - "8101:8101"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  profit-mcp:
+    image: productscout-backend:latest
+    pull_policy: never
+    container_name: productscout-profit-mcp
+    env_file:
+      - .env
+    environment:
+      MYSQL_HOST: host.docker.internal
+      MILVUS_HOST: host.docker.internal
+    command: ["python", "mcp_server/mcp_profit_server.py"]
+    ports:
+      - "8102:8102"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    depends_on:
+      - market-mcp
+
+  supply-risk-mcp:
+    image: productscout-backend:latest
+    pull_policy: never
+    container_name: productscout-supply-risk-mcp
+    env_file:
+      - .env
+    environment:
+      MYSQL_HOST: host.docker.internal
+      MILVUS_HOST: host.docker.internal
+    command: ["python", "mcp_server/mcp_supply_risk_server.py"]
+    ports:
+      - "8103:8103"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    depends_on:
+      - market-mcp
+
+  review-mcp:
+    image: productscout-backend:latest
+    pull_policy: never
+    container_name: productscout-review-mcp
+    env_file:
+      - .env
+    environment:
+      MYSQL_HOST: host.docker.internal
+      MILVUS_HOST: host.docker.internal
+    command: ["python", "mcp_server/mcp_review_server.py"]
+    ports:
+      - "8104:8104"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    depends_on:
+      - market-mcp
+
+  market-a2a:
+    image: productscout-backend:latest
+    pull_policy: never
+    container_name: productscout-market-a2a
+    env_file:
+      - .env
+    environment:
+      MYSQL_HOST: host.docker.internal
+      MILVUS_HOST: host.docker.internal
+      MARKET_MCP_URL: http://market-mcp:8101/mcp
+    command: ["python", "a2a_server/market_server.py"]
+    ports:
+      - "5101:5101"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    depends_on:
+      - market-mcp
+
+  profit-a2a:
+    image: productscout-backend:latest
+    pull_policy: never
+    container_name: productscout-profit-a2a
+    env_file:
+      - .env
+    environment:
+      MYSQL_HOST: host.docker.internal
+      MILVUS_HOST: host.docker.internal
+      PROFIT_MCP_URL: http://profit-mcp:8102/mcp
+    command: ["python", "a2a_server/profit_server.py"]
+    ports:
+      - "5102:5102"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    depends_on:
+      - profit-mcp
+
+  supply-risk-a2a:
+    image: productscout-backend:latest
+    pull_policy: never
+    container_name: productscout-supply-risk-a2a
+    env_file:
+      - .env
+    environment:
+      MYSQL_HOST: host.docker.internal
+      MILVUS_HOST: host.docker.internal
+      SUPPLY_RISK_MCP_URL: http://supply-risk-mcp:8103/mcp
+    command: ["python", "a2a_server/supply_risk_server.py"]
+    ports:
+      - "5103:5103"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    depends_on:
+      - supply-risk-mcp
+
+  review-a2a:
+    image: productscout-backend:latest
+    pull_policy: never
+    container_name: productscout-review-a2a
+    env_file:
+      - .env
+    environment:
+      MYSQL_HOST: host.docker.internal
+      MILVUS_HOST: host.docker.internal
+      REVIEW_MCP_URL: http://review-mcp:8104/mcp
+    command: ["python", "a2a_server/review_insight_server.py"]
+    ports:
+      - "5104:5104"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    depends_on:
+      - review-mcp
+
+  api:
+    image: productscout-backend:latest
+    pull_policy: never
+    container_name: productscout-api
+    env_file:
+      - .env
+    environment:
+      MYSQL_HOST: host.docker.internal
+      MILVUS_HOST: host.docker.internal
+      MARKET_A2A_URL: http://market-a2a:5101
+      PROFIT_A2A_URL: http://profit-a2a:5102
+      SUPPLY_RISK_A2A_URL: http://supply-risk-a2a:5103
+      REVIEW_A2A_URL: http://review-a2a:5104
+      MARKET_MCP_URL: http://market-mcp:8101/mcp
+      PROFIT_MCP_URL: http://profit-mcp:8102/mcp
+      SUPPLY_RISK_MCP_URL: http://supply-risk-mcp:8103/mcp
+      REVIEW_MCP_URL: http://review-mcp:8104/mcp
+    command: ["python", "api_server.py"]
+    ports:
+      - "8090:8090"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    depends_on:
+      - market-a2a
+      - profit-a2a
+      - supply-risk-a2a
+      - review-a2a
+
+  frontend:
+    build:
+      context: ./frontend
+    image: productscout-frontend:latest
+    container_name: productscout-frontend
+    ports:
+      - "5173:80"
+    restart: unless-stopped
+    depends_on:
+      - api
