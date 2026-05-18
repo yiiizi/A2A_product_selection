@@ -12,7 +12,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from config import MARKET_MCP_URL
 from a2a_base import AgentCard, create_a2a_app, call_llm, parse_json_from_llm
-from a2a_react import create_agent_executor, format_query_result, load_mcp_tools_from_url
+from a2a_react import (
+    create_agent_executor, format_query_result,
+    load_mcp_tools_for_agent, load_mcp_tools_from_url,
+)
 from create_logger import get_logger
 
 logger = get_logger("MarketAgent")
@@ -55,10 +58,17 @@ _executor = None  # 延迟初始化
 
 
 async def get_executor():
-    """延迟加载 MCP 工具并创建 Agent Executor（带缓存）"""
+    """延迟加载 MCP 工具并创建 Agent Executor（带缓存）。
+
+    v3.0: 使用 load_mcp_tools_for_agent 从多个 MCP Server 加载工具。
+    降级: 如果多 MCP 加载失败，回退到单 MARKET_MCP_URL。
+    """
     global _executor
     if _executor is None:
-        tools = await load_mcp_tools_from_url(MARKET_MCP_URL)
+        tools = await load_mcp_tools_for_agent("MarketAgent")
+        if not tools:
+            # 降级: 直接用单 MCP URL
+            tools = await load_mcp_tools_from_url(MARKET_MCP_URL)
         _executor = create_agent_executor(tools, SYSTEM_PROMPT)
         logger.info("MarketAgent MCP 工具加载完成: %d 个工具", len(tools))
     return _executor

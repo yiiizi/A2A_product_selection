@@ -14,6 +14,6 @@ RUN pip install --upgrade pip -i ${PIP_INDEX_URL} && \
 
 COPY . .
 
-EXPOSE 8090 5101 5102 5103 5104 8101 8102 8103 8104
+EXPOSE 8090 5101 5102 5103 5104 8101 8102 8103 8104 8201 8202
 
 CMD ["python", "api_server.py"]

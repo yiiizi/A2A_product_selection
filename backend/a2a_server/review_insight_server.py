@@ -9,7 +9,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from config import REVIEW_MCP_URL
 from a2a_base import AgentCard, create_a2a_app, call_llm, parse_json_from_llm
-from a2a_react import create_agent_executor, format_query_result, load_mcp_tools_from_url
+from a2a_react import (
+    create_agent_executor, format_query_result,
+    load_mcp_tools_for_agent, load_mcp_tools_from_url,
+)
 from create_logger import get_logger
 
 logger = get_logger("ReviewInsightAgent")
@@ -41,7 +44,9 @@ _executor = None
 async def get_executor():
     global _executor
     if _executor is None:
-        tools = await load_mcp_tools_from_url(REVIEW_MCP_URL)
+        tools = await load_mcp_tools_for_agent("ReviewInsightAgent")
+        if not tools:
+            tools = await load_mcp_tools_from_url(REVIEW_MCP_URL)
         _executor = create_agent_executor(tools, SYSTEM_PROMPT)
         logger.info("ReviewInsightAgent MCP 工具加载完成: %d 个工具", len(tools))
     return _executor

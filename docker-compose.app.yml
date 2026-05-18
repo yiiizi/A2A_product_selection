@@ -70,6 +70,41 @@ services:
     depends_on:
       - market-mcp
 
+  # ── 新增 MCP Server ─────────────────────────────
+
+  browser-mcp:
+    image: productscout-backend:latest
+    pull_policy: never
+    container_name: productscout-browser-mcp
+    env_file:
+      - .env
+    environment:
+      MYSQL_HOST: host.docker.internal
+      MILVUS_HOST: host.docker.internal
+    command: ["python", "mcp_servers/browser_scraper.py"]
+    ports:
+      - "8201:8201"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    depends_on:
+      - market-mcp
+
+  filesystem-mcp:
+    image: productscout-backend:latest
+    pull_policy: never
+    container_name: productscout-filesystem-mcp
+    env_file:
+      - .env
+    command: ["python", "mcp_servers/filesystem_reader.py"]
+    ports:
+      - "8202:8202"
+    restart: unless-stopped
+    depends_on:
+      - market-mcp
+
+  # ── A2A Agent Servers ──────────────────────────
+
   market-a2a:
     image: productscout-backend:latest
     pull_policy: never
@@ -80,6 +115,7 @@ services:
       MYSQL_HOST: host.docker.internal
       MILVUS_HOST: host.docker.internal
       MARKET_MCP_URL: http://market-mcp:8101/mcp
+      BROWSER_MCP_URL: http://browser-mcp:8201/mcp
     command: ["python", "a2a_server/market_server.py"]
     ports:
       - "5101:5101"
@@ -137,6 +173,8 @@ services:
       MYSQL_HOST: host.docker.internal
       MILVUS_HOST: host.docker.internal
       REVIEW_MCP_URL: http://review-mcp:8104/mcp
+      BROWSER_MCP_URL: http://browser-mcp:8201/mcp
+      FILESYSTEM_MCP_URL: http://filesystem-mcp:8202/mcp
     command: ["python", "a2a_server/review_insight_server.py"]
     ports:
       - "5104:5104"
@@ -155,6 +193,8 @@ services:
     environment:
       MYSQL_HOST: host.docker.internal
       MILVUS_HOST: host.docker.internal
+      BROWSER_MCP_URL: http://browser-mcp:8201/mcp
+      FILESYSTEM_MCP_URL: http://filesystem-mcp:8202/mcp
       MARKET_A2A_URL: http://market-a2a:5101
       PROFIT_A2A_URL: http://profit-a2a:5102
       SUPPLY_RISK_A2A_URL: http://supply-risk-a2a:5103

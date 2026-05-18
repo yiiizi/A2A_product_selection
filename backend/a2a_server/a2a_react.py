@@ -33,12 +33,32 @@ async def load_mcp_tools_from_url(mcp_url: str) -> list:
     from langchain_mcp_adapters.tools import load_mcp_tools
 
     url = mcp_url.rstrip("/")
-    async with streamablehttp_client(url) as (read, write, _):
-        async with ClientSession(read, write) as session:
-            await session.initialize()
-            tools = await load_mcp_tools(session)
-            _tools_cache[mcp_url] = tools
-            return tools
+    try:
+        async with streamablehttp_client(url) as (read, write, _):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                tools = await load_mcp_tools(session)
+                _tools_cache[mcp_url] = tools
+                return tools
+    except Exception:
+        # MCP Server 不可用时返回空列表，不中断 Agent 启动
+        return []
+
+
+async def load_mcp_tools_for_agent(agent_name: str) -> list:
+    """为一个 Agent 加载其需要的所有 MCP Server 的工具。
+
+    使用 mcp_client_manager 的映射配置。
+    这是推荐的加载方式——Agent 不需要知道具体 MCP URL。
+    """
+    try:
+        from mcp_client_manager import MCPClientManager
+        return await MCPClientManager.load_tools_for_agent(agent_name)
+    except ImportError:
+        # 降级: 如果没有 mcp_client_manager, 返回空
+        return []
+    except Exception:
+        return []
 
 
 # ── Agent 工厂 ──────────────────────────────────────
