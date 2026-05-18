@@ -597,7 +597,8 @@ async def _stream_product_compare(request: ChatRequest, session: dict, slots: di
     yield {"event": "delta", "data": {"content": f"正在对比 {targets[0].get('product_name','')} vs {targets[1].get('product_name','')}...\n\n"}}
 
     plan = Plan(primary_intent="product_compare", required_agents=[], skip_agents=[])
-    agents = AgentSelector.select(plan=plan, slots=slots)
+    selected = AgentSelector.select(plan=plan, slots=slots)
+    agents = {name: cfg.url for name, cfg in selected.items()}
 
     # Agent Slot 校验
     if targets:
@@ -653,7 +654,8 @@ async def _stream_supply_inquiry(request: ChatRequest, session: dict, slots: dic
         return
 
     plan = Plan(primary_intent="supply_inquiry", required_agents=[], skip_agents=[])
-    agents = AgentSelector.select(plan=plan, slots=slots)
+    selected = AgentSelector.select(plan=plan, slots=slots)
+    agents = {name: cfg.url for name, cfg in selected.items()}
 
     # Agent Slot 校验
     if candidates:

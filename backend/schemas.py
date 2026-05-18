@@ -75,8 +75,8 @@ class SelectionReport(BaseModel):
 
 class SelectionResponse(BaseModel):
     status: str = "success"
-    request_id: str
-    data: SelectionReport
+    request_id: str = ""
+    data: SelectionReport | None = None
 
 
 class ErrorResponse(BaseModel):

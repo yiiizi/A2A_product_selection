@@ -88,7 +88,11 @@ async def run_full_pipeline(
 
     # ── 阶段4: AgentSelector ─────────────────────
     from agent_selector import AgentSelector
-    agents = AgentSelector.select(plan=plan, user_intent=user_intent, slots=slots)
+    selected = AgentSelector.select(plan=plan, user_intent=user_intent, slots=slots)
+    # 转为 name → URL 字符串 (analyze_single_product 需要 str, 不是 AgentConfig)
+    agents: dict[str, str] = {
+        name: cfg.url for name, cfg in selected.items()
+    }
     logger.info("[%s] 选定 Agent: %s", request_id, list(agents.keys()))
 
     # ── 阶段5: 候选商品查询 ──────────────────────
@@ -239,7 +243,10 @@ async def stream_full_pipeline(
 
     # ── AgentSelector ─────────────────────────────
     from agent_selector import AgentSelector
-    agents = AgentSelector.select(plan=plan, user_intent=user_intent, slots=slots)
+    selected = AgentSelector.select(plan=plan, user_intent=user_intent, slots=slots)
+    agents: dict[str, str] = {
+        name: cfg.url for name, cfg in selected.items()
+    }
     logger.info("[%s] 流式-选定 Agent: %s", request_id, list(agents.keys()))
 
     # ── Slot Validator ────────────────────────────

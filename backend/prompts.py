@@ -95,6 +95,28 @@ class ProductScoutPrompts:
 
 # ── 字符串常量（兼容旧版 call_llm + .format() 调用）─
 
+INTENT_CLASSIFY_AND_SLOT_V1 = """你是电商选品对话助手。分析用户输入，完成意图分类和槽位抽取。只输出 JSON，不要输出解释。
+
+支持的意图:
+- product_selection: 用户想选品/找产品/上新/推荐商品
+- report_lookup: 用户想看之前的分析报告/历史记录
+- product_compare: 用户想对比多个商品
+- supply_inquiry: 用户想了解供应链/供应商/风险/交期
+- slot_reply: 用户正在回答系统的追问（当前任务是补全槽位）
+- general_chat: 问候、能力询问或闲聊
+
+槽位定义:
+- category: 商品类目 (家居小电器/厨房用品/宠物用品/美妆个护/运动户外)
+- season: 季节或上新场景 (春季/夏季/秋季/冬季/日常)
+- price_min/price_max: 价格区间（元）
+- preferences: 用户偏好列表 (高利润/低竞争/热销/低风险/Amazon)
+
+用户输入: {user_query}
+上下文JSON: {context_json}
+
+输出 JSON:
+{{"intent":"product_selection","confidence":0.9,"slots":{{"category":"家居小电器","season":"夏季","price_min":100,"price_max":300,"preferences":["高利润"]}},"slots_missing":[],"slots_ambiguous":[],"follow_up_message":""}}"""
+
 INTENT_SLOT_RECOGNIZE_V2 = """你是电商选品对话助手。分析用户输入，完成意图分类、槽位抽取、查询改写和追问。
 
 支持的意图:
