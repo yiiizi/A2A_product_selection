@@ -464,62 +464,17 @@ def save_agent_logs(request_id: str, products: list[ProductAnalysisResult]):
 
 
 async def run_selection(request: SelectionRequest) -> SelectionReport:
-    request_id = f"req-{datetime.now().strftime('%Y%m%d')}-{uuid.uuid4().hex[:6]}"
-    start_time = time.time()
+    """
+    执行完整选品分析流程。
 
-    logger.info("开始选品分析 [%s] %s", request_id, request.query)
+    v2.0: 统一使用 pipeline.run_full_pipeline()，走 Intent → Planning →
+    AgentSelector → SlotValidator → Dispatch 全链路。
+    不再直接 agents=A2A_AGENTS。
+    """
+    from pipeline import run_full_pipeline
 
-    constraints = parse_selection_request(request.query)
-    logger.info("解析后的约束: %s", constraints.model_dump())
-
-    candidate_count = min(request.top_k * 3, 20)
-    candidates = query_candidate_products(constraints, top_k=candidate_count)
-    logger.info("候选商品数量: %d", len(candidates))
-
-    if not candidates:
-        return SelectionReport(
-            request_id=request_id,
-            query=request.query,
-            constraints=constraints,
-            products=[],
-            final_report="没有找到符合条件的候选商品，请尝试放宽价格区间、类目或偏好条件。",
-        )
-
-    # 只对最终需要返回的候选做完整 A2A 分析。候选池可以更大，但不要把所有候选都送进 4 个 Agent。
-    # top_k=5 时从原来的 10 个商品 * 4 Agent，降为 5 个商品 * 4 Agent。
-    products_to_analyze = candidates[: max(3, request.top_k // 2)]
-    analysis_tasks = [
-        analyze_single_product(product, constraints, request.query, agents=A2A_AGENTS)
-        for product in products_to_analyze
-    ]
-    results = await asyncio.gather(*analysis_tasks, return_exceptions=True)
-
-    products: list[ProductAnalysisResult] = []
-    for result in results:
-        if isinstance(result, ProductAnalysisResult):
-            products.append(result)
-        elif isinstance(result, Exception):
-            logger.error("商品分析失败: %s", result)
-
-    products.sort(key=lambda p: p.final_score, reverse=True)
-    products = products[:request.top_k]
-
-    for i, product in enumerate(products):
-        product.rank = i + 1
-
-    final_report = await generate_report(request.query, products)
-
-    save_selection_report(request_id, request.query, constraints, products, final_report)
-    save_agent_logs(request_id, products)
-
-    elapsed = time.time() - start_time
-    logger.info("选品分析完成 [%s] 耗时 %.1f 秒，返回 %d 个商品", request_id, elapsed, len(products))
-
-    return SelectionReport(
-        request_id=request_id,
-        query=request.query,
-        constraints=constraints,
-        products=products,
-        final_report=final_report,
-        created_at=datetime.now(),
+    result = await run_full_pipeline(
+        user_query=request.query,
+        top_k=request.top_k,
     )
+    return result["report"]

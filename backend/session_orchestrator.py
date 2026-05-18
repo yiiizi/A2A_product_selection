@@ -486,160 +486,63 @@ async def stream_message(request: ChatRequest) -> AsyncGenerator[dict, None]:
 
 
 async def _stream_selection(request: ChatRequest, session: dict, slots: dict, user_intent=None, plan: Plan | None = None) -> AsyncGenerator[dict, None]:
+    """
+    SSE 流式选品。v2.0: 委托 pipeline.stream_full_pipeline() 走统一链路：
+    Intent → Planning → AgentSelector → SlotValidator → Dispatch → Report。
+
+    session_orchestrator 只负责: SSE 事件透传 + 会话持久化。
+    """
+    from pipeline import stream_full_pipeline
+
     top_k = _extract_top_k(request.message)
     request_id = f"req-{datetime.now().strftime('%Y%m%d')}-{uuid.uuid4().hex[:6]}"
     start_time = time.time()
-    query = _compose_selection_query(request.message, slots)
+    intent = (plan.primary_intent if plan else None) or "product_selection"
 
-    # ★ 根据 Plan + 用户意图动态选择 Agent 组合
-    agents = AgentSelector.select(plan=plan, user_intent=user_intent, slots=slots)
-    agent_names = "、".join(agents.keys())
-    logger.info("开始选品 session=%s top_k=%s slots=%s agents=%s", request.session_id, top_k, slots, list(agents.keys()))
+    # 先 yield 槽位简报 (与旧版兼容)
     yield {
         "event": "delta",
-        "data": {"content": f"槽位已补齐：{_slot_brief(slots)}\n\n正在检索候选商品，并启动 {len(agents)} 个 A2A Agent（{agent_names}）并行分析。\n\n"},
+        "data": {"content": f"槽位已补齐：{_slot_brief(slots)}\n\n正在启动 A2A Agent 分析...\n\n"},
     }
 
-    constraints = Constraints(
-        category=slots.get("category"),
-        price_min=slots.get("price_min"),
-        price_max=None if slots.get("price_max") == ANY_PRICE_MAX else slots.get("price_max"),
-        season=slots.get("season"),
-        preferences=slots.get("preferences", []),
-    )
+    # 委托 pipeline 处理 Planning → AgentSelector → Dispatch → Report
+    final_report_text = ""
+    products_list: list = []
 
-    try:
-        candidates = await asyncio.to_thread(query_candidate_products, constraints, min(top_k * 3, 20))
-    except Exception as exc:
-        logger.exception("候选商品检索失败")
-        yield {"event": "error", "data": {"message": f"候选商品检索失败：{exc}"}}
-        return
+    async for event in stream_full_pipeline(
+        user_query=request.message,
+        top_k=top_k,
+        pre_intent=intent,
+        pre_slots=slots,
+        pre_user_intent=user_intent,
+        context=_load_context(session),
+    ):
+        yield event
 
-    if not candidates:
-        content = "没有找到满足当前条件的候选商品，可以放宽类目或价格区间后再试。"
-        yield {"event": "delta", "data": {"content": content}}
+        # 收集报告文本用于持久化
+        if event.get("event") == "report_delta":
+            final_report_text += event.get("data", {}).get("content", "")
+        elif event.get("event") == "products":
+            products_list = event.get("data", {}).get("products", [])
+
+    # 会话持久化
+    if final_report_text:
         SessionManager.add_message(
             session_id=request.session_id,
             role="assistant",
-            content=content,
-            message_type="text",
+            content=final_report_text,
+            message_type="report_card",
+            metadata={"request_id": request_id, "product_count": len(products_list)},
         )
-        yield {"event": "done", "data": {"message_type": "text"}}
-        return
-
-    products_to_analyze = candidates[: min(3, top_k)]
-
-    # ★ 阶段6: Agent 专属槽位校验 (DB 自动填充 + 缺失追问)
-    if products_to_analyze:
-        first_pid = products_to_analyze[0].get("product_id")
-        from slot_manager import AgentSlotValidator
-        validations = AgentSlotValidator.validate_all(
-            list(agents.keys()), slots, product_id=first_pid,
-        )
-        failed = [v for v in validations if not v.ready]
-        if failed:
-            # 有 Agent 缺失必填槽位 → 追问用户
-            questions = [v.question for v in failed]
-            missing_all = [slot for v in failed for slot in v.missing_required]
-            yield {"event": "follow_up", "data": {
-                "question": "\n".join(questions),
-                "options": [],
-                "missing_slots": missing_all,
-                "agents": [v.name for v in failed],
-            }}
-            logger.info("Agent 槽位不足，追问: %s", [v.name for v in failed])
-            return
-
-    names = "、".join(p.get("product_name", "") for p in products_to_analyze)
-    yield {
-        "event": "delta",
-        "data": {
-            "content": (
-                f"已筛出 {len(products_to_analyze)} 个候选商品：{names}\n\n"
-                "A2A Agent 将并行评估市场、利润、供应和口碑。完成一个商品就先输出一个商品结果。\n\n"
-            )
-        },
-    }
-
-    # ★ 阶段7: Agent 调度 (MCP 缓存清理 + 信号量 + 超时)
-    from agent_dispatcher import clear_mcp_cache, AGENT_SEMAPHORE, AGENT_TIMEOUTS, DEFAULT_AGENT_TIMEOUT
-    clear_mcp_cache()
-
-    max_timeout = max(
-        (AGENT_TIMEOUTS.get(name, DEFAULT_AGENT_TIMEOUT) for name in agents.keys()),
-        default=DEFAULT_AGENT_TIMEOUT,
-    )
-
-    async def _analyze_with_limit(product):
-        async with AGENT_SEMAPHORE:
-            return await asyncio.wait_for(
-                analyze_single_product(product, constraints, query, agents=agents),
-                timeout=max_timeout,
-            )
-
-    tasks = [
-        asyncio.create_task(_analyze_with_limit(product))
-        for product in products_to_analyze
-    ]
-
-    completed_products = []
-    total = len(tasks)
-    for done in asyncio.as_completed(tasks):
-        try:
-            product = await done
-        except asyncio.TimeoutError:
-            logger.warning("单商品分析超时 (%.0fs)", max_timeout)
-            yield {"event": "delta", "data": {"content": f"有一个商品分析超时（{max_timeout}秒），跳过。\n\n"}}
-            continue
-        except Exception as exc:
-            logger.exception("单商品分析失败")
-            yield {"event": "delta", "data": {"content": f"有一个商品分析失败：{exc}\n\n"}}
-            continue
-
-        completed_products.append(product)
-        completed_products.sort(key=lambda p: p.final_score, reverse=True)
-        for idx, item in enumerate(completed_products, start=1):
-            item.rank = idx
-
-        yield {"event": "products", "data": {"products": [p.model_dump() for p in completed_products]}}
-        yield {"event": "delta", "data": {"content": _product_summary(product, len(completed_products), total)}}
-
-    if not completed_products:
-        yield {"event": "error", "data": {"message": "A2A Agent 没有返回可用结果，请检查 Agent 服务和 MCP 服务。"}}
-        return
-
-    completed_products.sort(key=lambda p: p.final_score, reverse=True)
-    products = completed_products[:top_k]
-    for idx, product in enumerate(products, start=1):
-        product.rank = idx
-
-    yield {"event": "products", "data": {"products": [p.model_dump() for p in products]}}
-    yield {"event": "delta", "data": {"content": "商品并行分析已完成，正在生成最终综合选品报告。\n\n"}}
-
-    final_report = await generate_report(query, products)
-    save_selection_report(request_id, query, constraints, products, final_report)
-    save_agent_logs(request_id, products)
 
     latest_context = _load_context(SessionManager.get_or_create_session(request.session_id))
     latest_context["last_selection_request_id"] = request_id
-    latest_context["last_product_ids"] = [p.product_id for p in products]
+    if products_list:
+        latest_context["last_product_ids"] = [p.get("product_id") for p in products_list]
     SessionManager.update_context(request.session_id, latest_context)
 
-    yield {"event": "report_start", "data": {"message_type": "report_card"}}
-    for chunk in _split_text(final_report, 80):
-        yield {"event": "report_delta", "data": {"content": chunk}}
-        await asyncio.sleep(0.03)
-
-    SessionManager.add_message(
-        session_id=request.session_id,
-        role="assistant",
-        content=final_report,
-        message_type="report_card",
-        metadata={"request_id": request_id, "product_count": len(products)},
-    )
     elapsed = time.time() - start_time
     logger.info("选品完成 session=%s request=%s %.1fs", request.session_id, request_id, elapsed)
-    yield {"event": "done", "data": {"message_type": "report_card", "request_id": request_id}}
 
 
 async def _stream_report_lookup(request: ChatRequest, session: dict) -> AsyncGenerator[dict, None]:
