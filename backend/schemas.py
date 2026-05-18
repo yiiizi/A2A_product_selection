@@ -119,3 +119,86 @@ class ChatResponse(BaseModel):
     message: ChatMessage = Field(default_factory=ChatMessage)
     follow_up: FollowUp | None = None
     result: ChatResult | None = None
+
+
+# ── Planning / Agent 调度 ─────────────────────────────
+
+class PlanStep(BaseModel):
+    """单个执行步骤"""
+    step_id: int
+    description: str = ""              # "分析市场趋势和竞品"
+    agent_name: str = ""               # "MarketAgent"
+    depends_on: list[int] = Field(default_factory=list)
+    priority: int = 1                  # 1=高 2=中 3=低
+
+
+class Plan(BaseModel):
+    """Planning Agent 结构化输出"""
+    primary_intent: str = "product_selection"
+    required_agents: list[str] = Field(default_factory=list)
+    skip_agents: list[str] = Field(default_factory=list)
+    skip_reason: str = ""
+    steps: list[PlanStep] = Field(default_factory=list)
+    confidence: float = 0.8
+
+
+class SlotDef(BaseModel):
+    """Agent 专属槽位定义"""
+    key: str
+    label: str = ""
+    required: bool = False
+    default: Any = None
+    source: str = "db"                 # db / user / derived
+
+
+class AgentConfig(BaseModel):
+    """Agent 配置：URL + 专属槽位 + 超时策略"""
+    name: str
+    url: str
+    required_slots: dict[str, SlotDef] = Field(default_factory=dict)
+    timeout: int = 120
+    priority: int = 1
+    fallback_enabled: bool = True
+
+
+class AgentOutput(BaseModel):
+    """Agent 标准化输出"""
+    agent: str
+    product_id: int
+    status: str = "success"            # success / failed / partial / need_more_info
+    raw_data: dict[str, Any] = Field(default_factory=dict)
+    summary: str = ""
+    scores: dict[str, float] = Field(default_factory=dict)
+    suggestions: list[str] = Field(default_factory=list)
+    error: str | None = None
+    fallback: bool = False             # 是否降级
+
+    @classmethod
+    def merge(cls, agent_name: str, outputs: list[AgentOutput]) -> AgentOutput:
+        """聚合多个商品的分析结果为单个 Agent 输出"""
+        if not outputs:
+            return cls(agent=agent_name, product_id=0, status="failed", error="无结果")
+        summaries = [o.summary for o in outputs if o.summary]
+        suggestions = list(dict.fromkeys(s for o in outputs for s in o.suggestions))
+        all_scores = [o.scores for o in outputs if o.scores]
+        avg_scores = {}
+        if all_scores:
+            for key in all_scores[0]:
+                vals = [s[key] for s in all_scores if key in s]
+                avg_scores[key] = round(sum(vals) / len(vals), 1) if vals else 0
+        return cls(
+            agent=agent_name,
+            product_id=outputs[0].product_id,
+            status="success" if all(o.status == "success" for o in outputs) else "partial",
+            raw_data={o.product_id: o.raw_data for o in outputs},
+            summary="; ".join(summaries),
+            scores=avg_scores,
+            suggestions=suggestions,
+        )
+
+
+class SlotValidationResult(BaseModel):
+    """Agent 槽位校验结果"""
+    ready: bool
+    missing_slots: list[str] = Field(default_factory=list)
+    question: str = ""

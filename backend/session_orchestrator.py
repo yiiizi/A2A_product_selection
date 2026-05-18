@@ -12,14 +12,14 @@ from typing import Any
 from create_logger import get_logger
 from memory import ConversationMemory
 from schemas import ChatMessage, ChatRequest, ChatResponse, ChatResult, Constraints
+from agent_selector import AgentSelector
+from schemas import Plan
 from selection_service import (
-    A2A_AGENTS,
     analyze_single_product,
     generate_report,
     query_candidate_products,
     save_agent_logs,
     save_selection_report,
-    select_agents,
 )
 from session_service import SessionManager
 
@@ -304,23 +304,55 @@ async def stream_message(request: ChatRequest) -> AsyncGenerator[dict, None]:
             await _auto_learn_preferences(memory, request.message, slots)
             memory.add_query(intent, request.message)
 
-            # ★ 步骤2: 判断是否需要规划
-            need_plan = False
+            # ★ 步骤2: Planning (启发式优先, 省 LLM 调用)
+            selection_plan: Plan | None = None
             try:
-                from plan_engine import should_skip_planning, planning_agent
-                if not should_skip_planning([intent], slots):
-                    logger.info("触发 Planning Agent（复杂任务）")
-                    plan = await planning_agent(request.message, [intent], slots, context)
-                    need_plan = plan.need_plan
-                    if plan.steps:
-                        content = f"任务规划完成（{len(plan.steps)} 步）：{plan.reason}\n\n"
+                from plan_engine import should_skip_planning_llm, planning_agent
+
+                # 先尝试启发式 (省 1 次 LLM)
+                heuristic = should_skip_planning_llm([intent], slots)
+                if heuristic is not None:
+                    logger.info("启发式 Plan: agents=%s skip=%s", heuristic.required_agents, heuristic.skip_agents)
+                    selection_plan = Plan(
+                        primary_intent=heuristic.primary_intent,
+                        required_agents=list(heuristic.required_agents),
+                        skip_agents=list(heuristic.skip_agents),
+                        skip_reason=heuristic.skip_reason,
+                        steps=[{
+                            "step_id": s.step_id, "description": s.description,
+                            "agent_name": s.agent_name, "depends_on": s.depends_on,
+                        } for s in heuristic.steps],
+                        confidence=heuristic.confidence,
+                    )
+                    if heuristic.skip_reason:
+                        yield {"event": "delta", "data": {
+                            "content": f"任务分析: {heuristic.skip_reason}\n\n"
+                        }}
+                else:
+                    # 启发式无法判断 → 调用 LLM Planning
+                    logger.info("触发 LLM Planning Agent")
+                    engine_plan = await planning_agent(request.message, [intent], slots, context)
+                    selection_plan = Plan(
+                        primary_intent=engine_plan.primary_intent,
+                        required_agents=list(engine_plan.required_agents),
+                        skip_agents=list(engine_plan.skip_agents),
+                        skip_reason=engine_plan.skip_reason or engine_plan.reason,
+                        steps=[{
+                            "step_id": s.step_id, "description": s.description,
+                            "agent_name": s.agent_name, "depends_on": s.depends_on,
+                        } for s in engine_plan.steps],
+                        confidence=engine_plan.confidence,
+                    )
+                    if engine_plan.steps:
+                        skip_msg = f" (跳过: {', '.join(engine_plan.skip_agents)})" if engine_plan.skip_agents else ""
+                        content = f"任务规划完成（{len(engine_plan.steps)} 步）{skip_msg}：{engine_plan.reason}\n\n"
                         for chunk in _split_text(content, 30):
                             yield {"event": "delta", "data": {"content": chunk}}
                             await asyncio.sleep(0.02)
             except Exception as e:
-                logger.warning("Planning Agent 失败，直接执行: %s", e)
+                logger.warning("Planning 失败，兜底: %s", e)
 
-            async for item in _stream_selection(request, session, slots, user_intent=user_intent):
+            async for item in _stream_selection(request, session, slots, user_intent=user_intent, plan=selection_plan):
                 yield item
             return
 
@@ -453,14 +485,14 @@ async def stream_message(request: ChatRequest) -> AsyncGenerator[dict, None]:
         yield item
 
 
-async def _stream_selection(request: ChatRequest, session: dict, slots: dict, user_intent=None) -> AsyncGenerator[dict, None]:
+async def _stream_selection(request: ChatRequest, session: dict, slots: dict, user_intent=None, plan: Plan | None = None) -> AsyncGenerator[dict, None]:
     top_k = _extract_top_k(request.message)
     request_id = f"req-{datetime.now().strftime('%Y%m%d')}-{uuid.uuid4().hex[:6]}"
     start_time = time.time()
     query = _compose_selection_query(request.message, slots)
 
-    # 根据用户意图选择 Agent 组合
-    agents = select_agents(user_intent, slots)
+    # ★ 根据 Plan + 用户意图动态选择 Agent 组合
+    agents = AgentSelector.select(plan=plan, user_intent=user_intent, slots=slots)
     agent_names = "、".join(agents.keys())
     logger.info("开始选品 session=%s top_k=%s slots=%s agents=%s", request.session_id, top_k, slots, list(agents.keys()))
     yield {
@@ -496,6 +528,28 @@ async def _stream_selection(request: ChatRequest, session: dict, slots: dict, us
         return
 
     products_to_analyze = candidates[: min(3, top_k)]
+
+    # ★ 阶段6: Agent 专属槽位校验 (DB 自动填充 + 缺失追问)
+    if products_to_analyze:
+        first_pid = products_to_analyze[0].get("product_id")
+        from slot_manager import AgentSlotValidator
+        validations = AgentSlotValidator.validate_all(
+            list(agents.keys()), slots, product_id=first_pid,
+        )
+        failed = [v for v in validations if not v.ready]
+        if failed:
+            # 有 Agent 缺失必填槽位 → 追问用户
+            questions = [v.question for v in failed]
+            missing_all = [slot for v in failed for slot in v.missing_required]
+            yield {"event": "follow_up", "data": {
+                "question": "\n".join(questions),
+                "options": [],
+                "missing_slots": missing_all,
+                "agents": [v.name for v in failed],
+            }}
+            logger.info("Agent 槽位不足，追问: %s", [v.name for v in failed])
+            return
+
     names = "、".join(p.get("product_name", "") for p in products_to_analyze)
     yield {
         "event": "delta",
@@ -507,8 +561,24 @@ async def _stream_selection(request: ChatRequest, session: dict, slots: dict, us
         },
     }
 
+    # ★ 阶段7: Agent 调度 (MCP 缓存清理 + 信号量 + 超时)
+    from agent_dispatcher import clear_mcp_cache, AGENT_SEMAPHORE, AGENT_TIMEOUTS, DEFAULT_AGENT_TIMEOUT
+    clear_mcp_cache()
+
+    max_timeout = max(
+        (AGENT_TIMEOUTS.get(name, DEFAULT_AGENT_TIMEOUT) for name in agents.keys()),
+        default=DEFAULT_AGENT_TIMEOUT,
+    )
+
+    async def _analyze_with_limit(product):
+        async with AGENT_SEMAPHORE:
+            return await asyncio.wait_for(
+                analyze_single_product(product, constraints, query, agents=agents),
+                timeout=max_timeout,
+            )
+
     tasks = [
-        asyncio.create_task(analyze_single_product(product, constraints, query, agents=agents))
+        asyncio.create_task(_analyze_with_limit(product))
         for product in products_to_analyze
     ]
 
@@ -517,6 +587,10 @@ async def _stream_selection(request: ChatRequest, session: dict, slots: dict, us
     for done in asyncio.as_completed(tasks):
         try:
             product = await done
+        except asyncio.TimeoutError:
+            logger.warning("单商品分析超时 (%.0fs)", max_timeout)
+            yield {"event": "delta", "data": {"content": f"有一个商品分析超时（{max_timeout}秒），跳过。\n\n"}}
+            continue
         except Exception as exc:
             logger.exception("单商品分析失败")
             yield {"event": "delta", "data": {"content": f"有一个商品分析失败：{exc}\n\n"}}
@@ -619,7 +693,25 @@ async def _stream_product_compare(request: ChatRequest, session: dict, slots: di
 
     yield {"event": "delta", "data": {"content": f"正在对比 {targets[0].get('product_name','')} vs {targets[1].get('product_name','')}...\n\n"}}
 
-    agents = {"MarketAgent": A2A_AGENTS["MarketAgent"], "ReviewInsightAgent": A2A_AGENTS["ReviewInsightAgent"]}
+    plan = Plan(primary_intent="product_compare", required_agents=[], skip_agents=[])
+    agents = AgentSelector.select(plan=plan, slots=slots)
+
+    # Agent Slot 校验
+    if targets:
+        from slot_manager import AgentSlotValidator
+        validations = AgentSlotValidator.validate_all(
+            list(agents.keys()), slots, product_id=targets[0].get("product_id"),
+        )
+        failed = [v for v in validations if not v.ready]
+        if failed:
+            questions = [v.question for v in failed]
+            yield {"event": "follow_up", "data": {
+                "question": "\n".join(questions),
+                "options": [],
+                "missing_slots": [s for v in failed for s in v.missing_required],
+            }}
+            return
+
     results = []
     for product in targets[:2]:
         result = await analyze_single_product(product, constraints, request.message, agents=agents)
@@ -657,7 +749,25 @@ async def _stream_supply_inquiry(request: ChatRequest, session: dict, slots: dic
         yield {"event": "done", "data": {"message_type": "text"}}
         return
 
-    agents = {"SupplyRiskAgent": A2A_AGENTS["SupplyRiskAgent"]}
+    plan = Plan(primary_intent="supply_inquiry", required_agents=[], skip_agents=[])
+    agents = AgentSelector.select(plan=plan, slots=slots)
+
+    # Agent Slot 校验
+    if candidates:
+        from slot_manager import AgentSlotValidator
+        validations = AgentSlotValidator.validate_all(
+            list(agents.keys()), slots, product_id=candidates[0].get("product_id"),
+        )
+        failed = [v for v in validations if not v.ready]
+        if failed:
+            questions = [v.question for v in failed]
+            yield {"event": "follow_up", "data": {
+                "question": "\n".join(questions),
+                "options": [],
+                "missing_slots": [s for v in failed for s in v.missing_required],
+            }}
+            return
+
     content = f"正在分析「{category}」的供应链风险...\n\n"
     yield {"event": "delta", "data": {"content": content}}
 

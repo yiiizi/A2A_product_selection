@@ -219,40 +219,8 @@ def _mock_agent_result(agent_name: str, product_id: int) -> AgentResult:
     )
 
 
-def select_agents(user_intent=None, slots: dict | None = None) -> dict:
-    """根据用户意图和槽位动态选择 Agent 组合，减少不必要的 LLM 调用。
-
-    默认返回 4 个 Agent，传入 user_intent 时按需精简。
-    """
-    agents = dict(A2A_AGENTS)  # 默认全部
-
-    if user_intent is not None:
-        agents = {}
-        goal = getattr(user_intent, "goal", "profit_first")
-        experience = getattr(user_intent, "experience_level", "intermediate")
-        preferences = (slots or {}).get("preferences", [])
-
-        # 市场分析：默认需要
-        agents["MarketAgent"] = A2A_AGENTS["MarketAgent"]
-
-        # 利润分析：利润优先或老手时需要
-        if goal in ("profit_first",) or experience == "veteran":
-            agents["ProfitAgent"] = A2A_AGENTS["ProfitAgent"]
-
-        # 供应链风险：规避风险或新手时需要
-        if goal == "risk_averse" or experience == "newbie" or "低风险" in preferences:
-            agents["SupplyRiskAgent"] = A2A_AGENTS["SupplyRiskAgent"]
-
-        # 评论洞察：追趋势或新手时需要
-        if goal == "trend_chasing" or experience == "newbie":
-            agents["ReviewInsightAgent"] = A2A_AGENTS["ReviewInsightAgent"]
-
-        # 兜底：至少 2 个核心 Agent
-        if len(agents) < 2:
-            agents["ProfitAgent"] = A2A_AGENTS["ProfitAgent"]
-            agents["ReviewInsightAgent"] = A2A_AGENTS["ReviewInsightAgent"]
-
-    return agents
+# select_agents 已迁移至 agent_selector.AgentSelector.select()
+# 支持 Plan 驱动 + 用户意图 + 槽位三重决策
 
 
 async def analyze_single_product(
