@@ -524,6 +524,8 @@ async def _stream_selection(request: ChatRequest, session: dict, slots: dict, us
             final_report_text += event.get("data", {}).get("content", "")
         elif event.get("event") == "products":
             products_list = event.get("data", {}).get("products", [])
+        elif event.get("event") == "done" and event.get("data", {}).get("request_id"):
+            request_id = event["data"]["request_id"]
 
     # 会话持久化
     if final_report_text:
